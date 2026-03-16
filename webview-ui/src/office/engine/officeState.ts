@@ -215,6 +215,9 @@ export class OfficeState {
     preferredSeatId?: string,
     skipSpawnEffect?: boolean,
     folderName?: string,
+    projectId?: string,
+    projectName?: string,
+    isCrossProject?: boolean,
   ): void {
     if (this.characters.has(id)) return;
 
@@ -261,6 +264,15 @@ export class OfficeState {
 
     if (folderName) {
       ch.folderName = folderName;
+    }
+    if (projectId) {
+      ch.projectId = projectId;
+    }
+    if (projectName) {
+      ch.projectName = projectName;
+    }
+    if (isCrossProject) {
+      ch.isCrossProject = true;
     }
     if (!skipSpawnEffect) {
       ch.matrixEffect = 'spawn';

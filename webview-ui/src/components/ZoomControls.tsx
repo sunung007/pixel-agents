@@ -84,7 +84,7 @@ export function ZoomControls({ zoom, onZoomChange }: ZoomControlsProps) {
             borderRadius: 0,
             padding: '4px 12px',
             boxShadow: 'var(--pixel-shadow)',
-            fontSize: '26px',
+            fontSize: '14px',
             color: 'var(--pixel-text)',
             userSelect: 'none',
             opacity: fadeOut ? 0 : 1,
@@ -120,7 +120,7 @@ export function ZoomControls({ zoom, onZoomChange }: ZoomControlsProps) {
             cursor: maxDisabled ? 'default' : 'pointer',
             opacity: maxDisabled ? 'var(--pixel-btn-disabled-opacity)' : 1,
           }}
-          title="Zoom in (Ctrl+Scroll)"
+          title="확대 (Ctrl+스크롤)"
         >
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
             <line
@@ -157,7 +157,7 @@ export function ZoomControls({ zoom, onZoomChange }: ZoomControlsProps) {
             cursor: minDisabled ? 'default' : 'pointer',
             opacity: minDisabled ? 'var(--pixel-btn-disabled-opacity)' : 1,
           }}
-          title="Zoom out (Ctrl+Scroll)"
+          title="축소 (Ctrl+스크롤)"
         >
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
             <line

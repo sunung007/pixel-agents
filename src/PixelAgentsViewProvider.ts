@@ -24,6 +24,10 @@ import {
   sendWallTilesToWebview,
 } from './assetLoader.js';
 import {
+  ACTIVE_SESSION_MAX_AGE_MS,
+  CROSS_PROJECT_AGENT_ID_OFFSET,
+  CROSS_PROJECT_SCAN_INTERVAL_MS,
+  FILE_WATCHER_POLL_INTERVAL_MS,
   GLOBAL_KEY_SOUND_ENABLED,
   LAYOUT_REVISION_KEY,
   WORKSPACE_KEY_AGENT_SEATS,
@@ -31,7 +35,16 @@ import {
 import { ensureProjectScan } from './fileWatcher.js';
 import type { LayoutWatcher } from './layoutPersistence.js';
 import { readLayoutFromFile, watchLayoutFile, writeLayoutToFile } from './layoutPersistence.js';
+import {
+  generateCrossProjectAgentId,
+  getActiveJsonlFiles,
+  getAllProjectDirs,
+  resolveProjectName,
+} from './shared/multiProjectScanner.js';
+import { cancelPermissionTimer, cancelWaitingTimer } from './timerManager.js';
+import { processTranscriptLine } from './transcriptParser.js';
 import type { AgentState } from './types.js';
+import { createDefaultUsage } from './types.js';
 
 export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   nextAgentId = { current: 1 };
@@ -56,6 +69,14 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
 
   // Cross-window layout sync
   layoutWatcher: LayoutWatcher | null = null;
+
+  // Cross-project agent monitoring
+  crossProjectAgents = new Map<number, AgentState>();
+  crossProjectFileWatchers = new Map<number, fs.FSWatcher>();
+  crossProjectPollingTimers = new Map<number, ReturnType<typeof setInterval>>();
+  crossProjectWaitingTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  crossProjectPermissionTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  crossProjectScanTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -95,14 +116,20 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           message.folderPath as string | undefined,
         );
       } else if (message.type === 'focusAgent') {
-        const agent = this.agents.get(message.id);
+        const id = message.id as number;
+        // Skip cross-project agents (no terminal)
+        if (id >= CROSS_PROJECT_AGENT_ID_OFFSET) return;
+        const agent = this.agents.get(id);
         if (agent) {
-          agent.terminalRef.show();
+          agent.terminalRef?.show();
         }
       } else if (message.type === 'closeAgent') {
-        const agent = this.agents.get(message.id);
+        const id = message.id as number;
+        // Skip cross-project agents (can't close)
+        if (id >= CROSS_PROJECT_AGENT_ID_OFFSET) return;
+        const agent = this.agents.get(id);
         if (agent) {
-          agent.terminalRef.dispose();
+          agent.terminalRef?.dispose();
         }
       } else if (message.type === 'saveAgentSeats') {
         // Store seat assignments in a separate key (never touched by persistAgents)
@@ -162,6 +189,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
             this.permissionTimers,
             this.webview,
             this.persistAgents,
+            () => vscode.window.activeTerminal as import('./types.js').TerminalHandle | undefined,
           );
 
           // Load furniture assets BEFORE sending layout
@@ -265,6 +293,12 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           })();
         }
         sendExistingAgents(this.agents, this.context, this.webview);
+
+        // Re-send existing cross-project agents to the (possibly recreated) webview
+        this.sendExistingCrossProjectAgents();
+
+        // Start cross-project scanning
+        this.startCrossProjectScanning(projectDir);
       } else if (message.type === 'openSessionsFolder') {
         const projectDir = getProjectDirPath();
         if (projectDir && fs.existsSync(projectDir)) {
@@ -376,6 +410,263 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     );
   }
 
+  /** Re-send existing cross-project agents to a (possibly recreated) webview */
+  private sendExistingCrossProjectAgents(): void {
+    const webview = this.webview;
+    if (!webview || this.crossProjectAgents.size === 0) return;
+
+    for (const [agentId, agent] of this.crossProjectAgents) {
+      const dirName = agent.projectId ?? path.basename(agent.projectDir);
+      const projectName = resolveProjectName(dirName);
+      webview.postMessage({
+        type: 'agentCreated',
+        id: agentId,
+        projectId: dirName,
+        projectName,
+        isCrossProject: true,
+      });
+
+      // Re-send current tool/status state
+      for (const [toolId, status] of agent.activeToolStatuses) {
+        webview.postMessage({
+          type: 'agentToolStart',
+          id: agentId,
+          toolId,
+          status,
+        });
+      }
+      if (agent.isWaiting) {
+        webview.postMessage({
+          type: 'agentStatus',
+          id: agentId,
+          status: 'waiting',
+        });
+      }
+    }
+  }
+
+  /** Start cross-project scanning to discover agents from all projects */
+  private startCrossProjectScanning(currentProjectDir: string | null): void {
+    if (this.crossProjectScanTimer) return;
+
+    const scan = () => {
+      const allDirs = getAllProjectDirs();
+      const webview = this.webview;
+      if (!webview) return;
+
+      // Track which cross-project agents are still alive
+      const aliveIds = new Set<number>();
+
+      // Phase 1: Discover new agents and track alive IDs
+      for (const dirPath of allDirs) {
+        const dirName = path.basename(dirPath);
+        const isCurrent = currentProjectDir !== null && dirPath === currentProjectDir;
+        if (isCurrent) continue;
+
+        // For non-current projects, find active JSONL files
+        const activeFiles = getActiveJsonlFiles(dirPath, ACTIVE_SESSION_MAX_AGE_MS);
+
+        for (const jsonlFile of activeFiles) {
+          const filename = path.basename(jsonlFile);
+          const agentId = generateCrossProjectAgentId(dirPath, filename);
+          aliveIds.add(agentId);
+
+          if (!this.crossProjectAgents.has(agentId)) {
+            // New cross-project agent discovered
+            const agent: AgentState = {
+              id: agentId,
+              projectDir: dirPath,
+              jsonlFile,
+              fileOffset: 0,
+              lineBuffer: '',
+              activeToolIds: new Set(),
+              activeToolStatuses: new Map(),
+              activeToolNames: new Map(),
+              activeSubagentToolIds: new Map(),
+              activeSubagentToolNames: new Map(),
+              isWaiting: false,
+              permissionSent: false,
+              hadToolsInTurn: false,
+              projectId: dirName,
+              isCrossProject: true,
+              usage: createDefaultUsage(),
+            };
+
+            this.crossProjectAgents.set(agentId, agent);
+
+            // Skip to end of file (only show new activity)
+            try {
+              const stat = fs.statSync(jsonlFile);
+              agent.fileOffset = stat.size;
+            } catch {
+              // ignore
+            }
+
+            // Start file watching
+            this.startCrossProjectFileWatching(agentId, jsonlFile);
+
+            const projectName = resolveProjectName(dirName);
+            console.log(
+              `[Pixel Agents] Cross-project agent ${agentId}: ${projectName} (${filename})`,
+            );
+            webview.postMessage({
+              type: 'agentCreated',
+              id: agentId,
+              projectId: dirName,
+              projectName,
+              isCrossProject: true,
+            });
+          }
+        }
+      }
+
+      // Phase 2: Remove agents no longer in active files
+      for (const [agentId] of this.crossProjectAgents) {
+        if (!aliveIds.has(agentId)) {
+          this.removeCrossProjectAgent(agentId);
+          webview.postMessage({ type: 'agentClosed', id: agentId });
+        }
+      }
+
+      // Phase 3: Build project list AFTER removal for accurate counts
+      const projects: Array<{
+        id: string;
+        name: string;
+        dirPath: string;
+        isCurrent: boolean;
+        agentCount: number;
+      }> = [];
+
+      // Count cross-project agents per project dir
+      const countByDir = new Map<string, number>();
+      for (const agent of this.crossProjectAgents.values()) {
+        countByDir.set(agent.projectDir, (countByDir.get(agent.projectDir) || 0) + 1);
+      }
+
+      for (const dirPath of allDirs) {
+        const dirName = path.basename(dirPath);
+        const isCurrent = currentProjectDir !== null && dirPath === currentProjectDir;
+
+        if (isCurrent) {
+          projects.push({
+            id: dirName,
+            name: resolveProjectName(dirName),
+            dirPath,
+            isCurrent: true,
+            agentCount: this.agents.size,
+          });
+        } else {
+          const count = countByDir.get(dirPath) || 0;
+          if (count > 0) {
+            projects.push({
+              id: dirName,
+              name: resolveProjectName(dirName),
+              dirPath,
+              isCurrent: false,
+              agentCount: count,
+            });
+          }
+        }
+      }
+
+      // Send project list to webview
+      webview.postMessage({ type: 'projectsDiscovered', projects });
+    };
+
+    // Initial scan
+    scan();
+
+    // Periodic scan
+    this.crossProjectScanTimer = setInterval(scan, CROSS_PROJECT_SCAN_INTERVAL_MS);
+  }
+
+  /** Start file watching for a cross-project agent's JSONL file */
+  private startCrossProjectFileWatching(agentId: number, filePath: string): void {
+    // Primary: fs.watch
+    try {
+      const watcher = fs.watch(filePath, () => {
+        this.readCrossProjectLines(agentId);
+      });
+      this.crossProjectFileWatchers.set(agentId, watcher);
+    } catch {
+      // fs.watch may fail
+    }
+
+    // Secondary: polling
+    const interval = setInterval(() => {
+      if (!this.crossProjectAgents.has(agentId)) {
+        clearInterval(interval);
+        return;
+      }
+      this.readCrossProjectLines(agentId);
+    }, FILE_WATCHER_POLL_INTERVAL_MS);
+    this.crossProjectPollingTimers.set(agentId, interval);
+  }
+
+  /** Read new JSONL lines for a cross-project agent */
+  private readCrossProjectLines(agentId: number): void {
+    const agent = this.crossProjectAgents.get(agentId);
+    if (!agent) return;
+    const webview = this.webview;
+    if (!webview) return;
+
+    try {
+      const stat = fs.statSync(agent.jsonlFile);
+      if (stat.size <= agent.fileOffset) return;
+
+      const buf = Buffer.alloc(stat.size - agent.fileOffset);
+      const fd = fs.openSync(agent.jsonlFile, 'r');
+      fs.readSync(fd, buf, 0, buf.length, agent.fileOffset);
+      fs.closeSync(fd);
+      agent.fileOffset = stat.size;
+
+      const text = agent.lineBuffer + buf.toString('utf-8');
+      const lines = text.split('\n');
+      agent.lineBuffer = lines.pop() || '';
+
+      const hasLines = lines.some((l) => l.trim());
+      if (hasLines) {
+        cancelWaitingTimer(agentId, this.crossProjectWaitingTimers);
+        cancelPermissionTimer(agentId, this.crossProjectPermissionTimers);
+        if (agent.permissionSent) {
+          agent.permissionSent = false;
+          webview.postMessage({ type: 'agentToolPermissionClear', id: agentId });
+        }
+      }
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        processTranscriptLine(
+          agentId,
+          line,
+          this.crossProjectAgents,
+          this.crossProjectWaitingTimers,
+          this.crossProjectPermissionTimers,
+          webview,
+        );
+      }
+    } catch {
+      // ignore read errors
+    }
+  }
+
+  /** Remove a cross-project agent and clean up its watchers */
+  private removeCrossProjectAgent(agentId: number): void {
+    const agent = this.crossProjectAgents.get(agentId);
+    if (!agent) return;
+
+    this.crossProjectFileWatchers.get(agentId)?.close();
+    this.crossProjectFileWatchers.delete(agentId);
+
+    const pt = this.crossProjectPollingTimers.get(agentId);
+    if (pt) clearInterval(pt);
+    this.crossProjectPollingTimers.delete(agentId);
+
+    cancelWaitingTimer(agentId, this.crossProjectWaitingTimers);
+    cancelPermissionTimer(agentId, this.crossProjectPermissionTimers);
+    this.crossProjectAgents.delete(agentId);
+  }
+
   private startLayoutWatcher(): void {
     if (this.layoutWatcher) return;
     this.layoutWatcher = watchLayoutFile((layout) => {
@@ -402,6 +693,14 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     if (this.projectScanTimer.current) {
       clearInterval(this.projectScanTimer.current);
       this.projectScanTimer.current = null;
+    }
+    // Clean up cross-project scanning
+    if (this.crossProjectScanTimer) {
+      clearInterval(this.crossProjectScanTimer);
+      this.crossProjectScanTimer = null;
+    }
+    for (const id of [...this.crossProjectAgents.keys()]) {
+      this.removeCrossProjectAgent(id);
     }
   }
 }

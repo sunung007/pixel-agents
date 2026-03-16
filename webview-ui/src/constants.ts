@@ -114,3 +114,7 @@ export const CHARACTER_HIT_HALF_WIDTH = 8;
 export const CHARACTER_HIT_HEIGHT = 24;
 export const TOOL_OVERLAY_VERTICAL_OFFSET = 32;
 export const PULSE_ANIMATION_DURATION_SEC = 1.5;
+
+// ── Usage Status Bar ──────────────────────────────────────────
+export const USAGE_BAR_HEIGHT_PX = 24;
+export const USAGE_ELAPSED_UPDATE_INTERVAL_MS = 1000;

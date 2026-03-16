@@ -1,12 +1,7 @@
 import * as path from 'path';
-import type * as vscode from 'vscode';
 
-import {
-  BASH_COMMAND_DISPLAY_MAX_LENGTH,
-  TASK_DESCRIPTION_DISPLAY_MAX_LENGTH,
-  TEXT_IDLE_DELAY_MS,
-  TOOL_DONE_DELAY_MS,
-} from './constants.js';
+import { TEXT_IDLE_DELAY_MS, TOOL_DONE_DELAY_MS } from './constants.js';
+import type { MessageSink } from './shared/messageSink.js';
 import {
   cancelPermissionTimer,
   cancelWaitingTimer,
@@ -29,7 +24,7 @@ export function formatToolStatus(toolName: string, input: Record<string, unknown
       return `Writing ${base(input.file_path)}`;
     case 'Bash': {
       const cmd = (input.command as string) || '';
-      return `Running: ${cmd.length > BASH_COMMAND_DISPLAY_MAX_LENGTH ? cmd.slice(0, BASH_COMMAND_DISPLAY_MAX_LENGTH) + '\u2026' : cmd}`;
+      return `Running: ${cmd}`;
     }
     case 'Glob':
       return 'Searching files';
@@ -42,9 +37,7 @@ export function formatToolStatus(toolName: string, input: Record<string, unknown
     case 'Task':
     case 'Agent': {
       const desc = typeof input.description === 'string' ? input.description : '';
-      return desc
-        ? `Subtask: ${desc.length > TASK_DESCRIPTION_DISPLAY_MAX_LENGTH ? desc.slice(0, TASK_DESCRIPTION_DISPLAY_MAX_LENGTH) + '\u2026' : desc}`
-        : 'Running subtask';
+      return desc ? `Subtask: ${desc}` : 'Running subtask';
     }
     case 'AskUserQuestion':
       return 'Waiting for your answer';
@@ -63,14 +56,31 @@ export function processTranscriptLine(
   agents: Map<number, AgentState>,
   waitingTimers: Map<number, ReturnType<typeof setTimeout>>,
   permissionTimers: Map<number, ReturnType<typeof setTimeout>>,
-  webview: vscode.Webview | undefined,
+  webview: MessageSink | undefined,
 ): void {
   const agent = agents.get(agentId);
   if (!agent) return;
   try {
     const record = JSON.parse(line);
 
+    // Capture session start time from the first record
+    if (!agent.usage.sessionStartTime && record.timestamp) {
+      agent.usage.sessionStartTime = record.timestamp as string;
+    }
+
     if (record.type === 'assistant' && Array.isArray(record.message?.content)) {
+      // Accumulate token usage from final assistant records only (stop_reason !== null)
+      const stopReason = record.message?.stop_reason;
+      if (stopReason !== null && stopReason !== undefined) {
+        const usage = record.message?.usage;
+        if (usage) {
+          agent.usage.inputTokens += (usage.input_tokens as number) || 0;
+          agent.usage.outputTokens += (usage.output_tokens as number) || 0;
+          agent.usage.cacheCreationTokens += (usage.cache_creation_input_tokens as number) || 0;
+          agent.usage.cacheReadTokens += (usage.cache_read_input_tokens as number) || 0;
+          sendUsageUpdate(agentId, agent, webview);
+        }
+      }
       const blocks = record.message.content as Array<{
         type: string;
         id?: string;
@@ -184,6 +194,8 @@ export function processTranscriptLine(
       agent.isWaiting = true;
       agent.permissionSent = false;
       agent.hadToolsInTurn = false;
+      agent.usage.turnCount++;
+      sendUsageUpdate(agentId, agent, webview);
       webview?.postMessage({
         type: 'agentStatus',
         id: agentId,
@@ -195,13 +207,25 @@ export function processTranscriptLine(
   }
 }
 
+export function sendUsageUpdate(
+  agentId: number,
+  agent: AgentState,
+  webview: MessageSink | undefined,
+): void {
+  webview?.postMessage({
+    type: 'agentUsageUpdate',
+    id: agentId,
+    usage: { ...agent.usage },
+  });
+}
+
 function processProgressRecord(
   agentId: number,
   record: Record<string, unknown>,
   agents: Map<number, AgentState>,
   waitingTimers: Map<number, ReturnType<typeof setTimeout>>,
   permissionTimers: Map<number, ReturnType<typeof setTimeout>>,
-  webview: vscode.Webview | undefined,
+  webview: MessageSink | undefined,
 ): void {
   const agent = agents.get(agentId);
   if (!agent) return;

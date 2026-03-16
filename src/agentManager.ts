@@ -11,8 +11,11 @@ import {
 } from './constants.js';
 import { ensureProjectScan, readNewLines, startFileWatching } from './fileWatcher.js';
 import { migrateAndLoadLayout } from './layoutPersistence.js';
+import type { MessageSink } from './shared/messageSink.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from './timerManager.js';
-import type { AgentState, PersistedAgent } from './types.js';
+import { sendUsageUpdate } from './transcriptParser.js';
+import type { AgentState, AgentUsage, PersistedAgent } from './types.js';
+import { createDefaultUsage } from './types.js';
 
 export function getProjectDirPath(cwd?: string): string | null {
   const workspacePath = cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -35,7 +38,7 @@ export async function launchNewTerminal(
   permissionTimers: Map<number, ReturnType<typeof setTimeout>>,
   jsonlPollTimers: Map<number, ReturnType<typeof setInterval>>,
   projectScanTimerRef: { current: ReturnType<typeof setInterval> | null },
-  webview: vscode.Webview | undefined,
+  webview: MessageSink | undefined,
   persistAgents: () => void,
   folderPath?: string,
 ): Promise<void> {
@@ -81,13 +84,15 @@ export async function launchNewTerminal(
     permissionSent: false,
     hadToolsInTurn: false,
     folderName,
+    usage: createDefaultUsage(),
   };
 
   agents.set(id, agent);
   activeAgentIdRef.current = id;
   persistAgents();
   console.log(`[Pixel Agents] Agent ${id}: created for terminal ${terminal.name}`);
-  webview?.postMessage({ type: 'agentCreated', id, folderName });
+  const projectName = vscode.workspace.name || vscode.workspace.workspaceFolders?.[0]?.name;
+  webview?.postMessage({ type: 'agentCreated', id, folderName, projectName });
 
   ensureProjectScan(
     projectDir,
@@ -102,6 +107,7 @@ export async function launchNewTerminal(
     permissionTimers,
     webview,
     persistAgents,
+    () => vscode.window.activeTerminal as import('./types.js').TerminalHandle | undefined,
   );
 
   // Poll for the specific JSONL file to appear
@@ -183,7 +189,7 @@ export function persistAgents(
   for (const agent of agents.values()) {
     persisted.push({
       id: agent.id,
-      terminalName: agent.terminalRef.name,
+      terminalName: agent.terminalRef?.name ?? `agent-${agent.id}`,
       jsonlFile: agent.jsonlFile,
       projectDir: agent.projectDir,
       folderName: agent.folderName,
@@ -205,7 +211,7 @@ export function restoreAgents(
   jsonlPollTimers: Map<number, ReturnType<typeof setInterval>>,
   projectScanTimerRef: { current: ReturnType<typeof setInterval> | null },
   activeAgentIdRef: { current: number | null },
-  webview: vscode.Webview | undefined,
+  webview: MessageSink | undefined,
   doPersist: () => void,
 ): void {
   const persisted = context.workspaceState.get<PersistedAgent[]>(WORKSPACE_KEY_AGENTS, []);
@@ -236,6 +242,7 @@ export function restoreAgents(
       permissionSent: false,
       hadToolsInTurn: false,
       folderName: p.folderName,
+      usage: createDefaultUsage(),
     };
 
     agents.set(p.id, agent);
@@ -257,6 +264,8 @@ export function restoreAgents(
       if (fs.existsSync(p.jsonlFile)) {
         const stat = fs.statSync(p.jsonlFile);
         agent.fileOffset = stat.size;
+        // Parse historical usage from the full JSONL file
+        agent.usage = parseUsageFromFile(p.jsonlFile);
         startFileWatching(
           p.id,
           p.jsonlFile,
@@ -325,6 +334,7 @@ export function restoreAgents(
       permissionTimers,
       webview,
       doPersist,
+      () => vscode.window.activeTerminal as import('./types.js').TerminalHandle | undefined,
     );
   }
 }
@@ -332,7 +342,7 @@ export function restoreAgents(
 export function sendExistingAgents(
   agents: Map<number, AgentState>,
   context: vscode.ExtensionContext,
-  webview: vscode.Webview | undefined,
+  webview: MessageSink | undefined,
 ): void {
   if (!webview) return;
   const agentIds: number[] = [];
@@ -357,11 +367,13 @@ export function sendExistingAgents(
     `[Pixel Agents] sendExistingAgents: agents=${JSON.stringify(agentIds)}, meta=${JSON.stringify(agentMeta)}`,
   );
 
+  const projectName = vscode.workspace.name || vscode.workspace.workspaceFolders?.[0]?.name;
   webview.postMessage({
     type: 'existingAgents',
     agents: agentIds,
     agentMeta,
     folderNames,
+    projectName,
   });
 
   sendCurrentAgentStatuses(agents, webview);
@@ -369,7 +381,7 @@ export function sendExistingAgents(
 
 export function sendCurrentAgentStatuses(
   agents: Map<number, AgentState>,
-  webview: vscode.Webview | undefined,
+  webview: MessageSink | undefined,
 ): void {
   if (!webview) return;
   for (const [agentId, agent] of agents) {
@@ -390,12 +402,49 @@ export function sendCurrentAgentStatuses(
         status: 'waiting',
       });
     }
+    // Send current usage data
+    sendUsageUpdate(agentId, agent, webview);
   }
+}
+
+export function parseUsageFromFile(filePath: string): AgentUsage {
+  const result = createDefaultUsage();
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line);
+        if (!result.sessionStartTime && record.timestamp) {
+          result.sessionStartTime = record.timestamp as string;
+        }
+        if (record.type === 'assistant') {
+          const stopReason = record.message?.stop_reason;
+          if (stopReason !== null && stopReason !== undefined) {
+            const usage = record.message?.usage;
+            if (usage) {
+              result.inputTokens += (usage.input_tokens as number) || 0;
+              result.outputTokens += (usage.output_tokens as number) || 0;
+              result.cacheCreationTokens += (usage.cache_creation_input_tokens as number) || 0;
+              result.cacheReadTokens += (usage.cache_read_input_tokens as number) || 0;
+            }
+          }
+        } else if (record.type === 'system' && record.subtype === 'turn_duration') {
+          result.turnCount++;
+        }
+      } catch {
+        /* skip malformed lines */
+      }
+    }
+  } catch {
+    /* file not readable */
+  }
+  return result;
 }
 
 export function sendLayout(
   context: vscode.ExtensionContext,
-  webview: vscode.Webview | undefined,
+  webview: MessageSink | undefined,
   defaultLayout?: Record<string, unknown> | null,
 ): void {
   if (!webview) return;

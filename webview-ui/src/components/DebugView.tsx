@@ -1,3 +1,6 @@
+import { useEffect, useRef } from 'react';
+
+import type { OfficeState } from '../office/engine/officeState.js';
 import type { ToolActivity } from '../office/types.js';
 import { vscode } from '../vscodeApi.js';
 
@@ -8,10 +11,8 @@ interface DebugViewProps {
   agentStatuses: Record<number, string>;
   subagentTools: Record<number, Record<string, ToolActivity[]>>;
   onSelectAgent: (id: number) => void;
+  officeState?: OfficeState;
 }
-
-/** Z-index just below the floating toolbar (50) so the toolbar stays on top */
-const DEBUG_Z = 40;
 
 function ToolDot({ tool }: { tool: ToolActivity }) {
   return (
@@ -28,6 +29,7 @@ function ToolDot({ tool }: { tool: ToolActivity }) {
             : 'var(--vscode-charts-blue, #3794ff)',
         display: 'inline-block',
         flexShrink: 0,
+        marginTop: '5px',
       }}
     />
   );
@@ -37,15 +39,20 @@ function ToolLine({ tool }: { tool: ToolActivity }) {
   return (
     <span
       style={{
-        fontSize: '22px',
+        fontFamily: 'var(--pixel-font-code)',
+        fontSize: 'var(--pixel-debug-font-size, 12px)',
         opacity: tool.done ? 0.5 : 0.8,
         display: 'flex',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         gap: 5,
+        minWidth: 0,
+        wordBreak: 'break-word',
       }}
     >
       <ToolDot tool={tool} />
-      {tool.permissionWait && !tool.done ? 'Needs approval' : tool.status}
+      <span style={{ minWidth: 0 }}>
+        {tool.permissionWait && !tool.done ? '승인 대기' : tool.status}
+      </span>
     </span>
   );
 }
@@ -57,8 +64,23 @@ export function DebugView({
   agentStatuses,
   subagentTools,
   onSelectAgent,
+  officeState,
 }: DebugViewProps) {
+  const cardRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+
+  // Scroll selected agent card into view
+  useEffect(() => {
+    if (selectedAgent !== null) {
+      const el = cardRefs.current.get(selectedAgent);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+  }, [selectedAgent]);
+
   const renderAgentCard = (id: number) => {
+    const ch = officeState?.characters.get(id);
+    const isCrossProject = ch?.isCrossProject;
     const isSelected = selectedAgent === id;
     const tools = agentTools[id] || [];
     const subs = subagentTools[id] || {};
@@ -67,43 +89,63 @@ export function DebugView({
     return (
       <div
         key={id}
+        ref={(el) => {
+          if (el) cardRefs.current.set(id, el);
+          else cardRefs.current.delete(id);
+        }}
         style={{
           border: `2px solid ${isSelected ? '#5a8cff' : '#4a4a6a'}`,
           borderRadius: 0,
           padding: '6px 8px',
+          minWidth: 0,
+          overflow: 'hidden',
           background: isSelected
             ? 'var(--vscode-list-activeSelectionBackground, rgba(255,255,255,0.04))'
             : undefined,
         }}
       >
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 0 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 0, flexWrap: 'wrap' }}>
           <button
             onClick={() => onSelectAgent(id)}
             style={{
               borderRadius: 0,
-              padding: '6px 10px',
-              fontSize: '26px',
+              padding: '4px 8px',
+              fontSize: '12px',
               background: isSelected ? 'rgba(90, 140, 255, 0.25)' : undefined,
               color: isSelected ? '#fff' : undefined,
               fontWeight: isSelected ? 'bold' : undefined,
             }}
           >
-            Agent #{id}
+            {isCrossProject && ch?.projectName ? `${ch.projectName} #${id}` : `에이전트 #${id}`}
           </button>
-          <button
-            onClick={() => vscode.postMessage({ type: 'closeAgent', id })}
-            style={{
-              borderRadius: 0,
-              padding: '6px 8px',
-              fontSize: '26px',
-              opacity: 0.7,
-              background: isSelected ? 'rgba(90, 140, 255, 0.25)' : undefined,
-              color: isSelected ? '#fff' : undefined,
-            }}
-            title="Close agent"
-          >
-            ✕
-          </button>
+          {isCrossProject && (
+            <span
+              style={{
+                fontSize: '10px',
+                color: 'var(--pixel-text-dim)',
+                padding: '2px 5px',
+                opacity: 0.7,
+              }}
+            >
+              (외부)
+            </span>
+          )}
+          {!isCrossProject && (
+            <button
+              onClick={() => vscode.postMessage({ type: 'closeAgent', id })}
+              style={{
+                borderRadius: 0,
+                padding: '4px 6px',
+                fontSize: '12px',
+                opacity: 0.7,
+                background: isSelected ? 'rgba(90, 140, 255, 0.25)' : undefined,
+                color: isSelected ? '#fff' : undefined,
+              }}
+              title="에이전트 닫기"
+            >
+              ✕
+            </button>
+          )}
         </span>
         {(tools.length > 0 || status === 'waiting') && (
           <div
@@ -140,7 +182,8 @@ export function DebugView({
             {status === 'waiting' && !hasActiveTools && (
               <span
                 style={{
-                  fontSize: '22px',
+                  fontFamily: 'var(--pixel-font-code)',
+                  fontSize: 'var(--pixel-debug-font-size, 12px)',
                   opacity: 0.85,
                   display: 'flex',
                   alignItems: 'center',
@@ -157,7 +200,7 @@ export function DebugView({
                     flexShrink: 0,
                   }}
                 />
-                Might be waiting for input
+                입력 대기 중
               </span>
             )}
           </div>
@@ -169,21 +212,29 @@ export function DebugView({
   return (
     <div
       style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        width: '100%',
-        height: '100%',
-        background: 'var(--vscode-editor-background)',
-        zIndex: DEBUG_Z,
+        background: 'var(--pixel-bg)',
+        // borderLeft: '2px solid var(--pixel-border)',
+        borderTop: '2px solid var(--pixel-border)',
         overflow: 'auto',
+        padding: '8px',
+        color: 'var(--pixel-debug-text)',
+        minWidth: 0,
       }}
     >
-      {/* Top padding so cards don't overlap the floating toolbar */}
-      <div style={{ padding: '12px 12px 12px', fontSize: '28px' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {agents.map(renderAgentCard)}
-        </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {agents.length === 0 && (
+          <div
+            style={{
+              fontFamily: 'var(--pixel-font-code)',
+              fontSize: 'var(--pixel-debug-font-size, 12px)',
+              color: 'var(--pixel-text-dim)',
+              padding: '8px 4px',
+            }}
+          >
+            활성 에이전트 없음
+          </div>
+        )}
+        {agents.map(renderAgentCard)}
       </div>
     </div>
   );

@@ -170,11 +170,41 @@ export function ToolOverlay({
                 />
               )}
               <div style={{ overflow: 'hidden' }}>
+                {!isSub && ch.projectName && (
+                  <span
+                    style={{
+                      fontFamily: 'var(--pixel-font)',
+                      fontSize: '12px',
+                      color: 'var(--pixel-text-dim)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      display: 'block',
+                    }}
+                  >
+                    {ch.projectName}
+                  </span>
+                )}
+                {!isSub && (
+                  <span
+                    style={{
+                      fontFamily: 'var(--pixel-font)',
+                      fontSize: '12px',
+                      color: 'var(--pixel-text-dim)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      display: 'block',
+                    }}
+                  >
+                    {`에이전트 #${id}`}
+                  </span>
+                )}
                 <span
                   style={{
-                    fontSize: isSub ? '20px' : '22px',
+                    fontFamily: 'var(--pixel-font)',
+                    fontSize: '14px', // isSub ? '11px' : '12px',
                     fontStyle: isSub ? 'italic' : undefined,
-                    color: 'var(--vscode-foreground)',
+                    // color: '#888',
+                    color: 'var(--pixel-text)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     display: 'block',
@@ -182,11 +212,12 @@ export function ToolOverlay({
                 >
                   {activityText}
                 </span>
-                {ch.folderName && (
+                {!ch.projectName && ch.folderName && (
                   <span
                     style={{
-                      fontSize: '16px',
-                      color: 'var(--pixel-text-dim)',
+                      fontFamily: 'var(--pixel-font)',
+                      fontSize: '14px',
+                      color: 'var(--pixel-text)',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       display: 'block',
@@ -196,20 +227,20 @@ export function ToolOverlay({
                   </span>
                 )}
               </div>
-              {isSelected && !isSub && (
+              {isSelected && !isSub && !ch.isCrossProject && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     onCloseAgent(id);
                   }}
-                  title="Close agent"
+                  title="에이전트 닫기"
                   style={{
                     background: 'none',
                     border: 'none',
                     color: 'var(--pixel-close-text)',
                     cursor: 'pointer',
                     padding: '0 2px',
-                    fontSize: '26px',
+                    fontSize: '14px',
                     lineHeight: 1,
                     marginLeft: 2,
                     flexShrink: 0,

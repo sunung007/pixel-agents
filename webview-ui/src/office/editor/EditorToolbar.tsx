@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getColorizedSprite } from '../colorize.js';
 import { getColorizedFloorSprite, getFloorPatternCount, hasFloorSprites } from '../floorTiles.js';
 import type { FurnitureCategory, LoadedAssetData } from '../layout/furnitureCatalog.js';
-import { getWallSetCount, getWallSetPreviewSprite } from '../wallTiles.js';
 import {
   buildDynamicCatalog,
   getActiveCategories,
@@ -12,10 +11,11 @@ import {
 import { getCachedSprite } from '../sprites/spriteCache.js';
 import type { FloorColor, TileType as TileTypeVal } from '../types.js';
 import { EditTool } from '../types.js';
+import { getWallSetCount, getWallSetPreviewSprite } from '../wallTiles.js';
 
 const btnStyle: React.CSSProperties = {
   padding: '3px 8px',
-  fontSize: '22px',
+  fontSize: '13px',
   background: 'rgba(255, 255, 255, 0.08)',
   color: 'rgba(255, 255, 255, 0.7)',
   border: '2px solid transparent',
@@ -32,7 +32,7 @@ const activeBtnStyle: React.CSSProperties = {
 
 const tabStyle: React.CSSProperties = {
   padding: '2px 6px',
-  fontSize: '20px',
+  fontSize: '12px',
   background: 'transparent',
   color: 'rgba(255, 255, 255, 0.5)',
   border: '2px solid transparent',
