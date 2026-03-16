@@ -46,6 +46,23 @@ export interface WorkspaceFolder {
   path: string;
 }
 
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  dirPath: string;
+  isCurrent: boolean;
+  agentCount: number;
+}
+
+export interface AgentUsageData {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  turnCount: number;
+  sessionStartTime: string | null;
+}
+
 export interface ExtensionMessageState {
   agents: number[];
   selectedAgent: number | null;
@@ -57,6 +74,12 @@ export interface ExtensionMessageState {
   layoutWasReset: boolean;
   loadedAssets?: { catalog: FurnitureAsset[]; sprites: Record<string, string[][]> };
   workspaceFolders: WorkspaceFolder[];
+  projects: ProjectInfo[];
+  projectFilter: Set<string>;
+  setProjectFilter: (filter: Set<string>) => void;
+  agentProjectMap: Map<number, string>;
+  agentUsage: Record<number, AgentUsageData>;
+  setSelectedAgent: (id: number | null) => void;
 }
 
 function saveAgentSeats(os: OfficeState): void {
@@ -87,18 +110,25 @@ export function useExtensionMessages(
     { catalog: FurnitureAsset[]; sprites: Record<string, string[][]> } | undefined
   >();
   const [workspaceFolders, setWorkspaceFolders] = useState<WorkspaceFolder[]>([]);
+  const [projects, setProjects] = useState<ProjectInfo[]>([]);
+  const [projectFilter, setProjectFilter] = useState<Set<string>>(new Set());
+  const [agentUsage, setAgentUsage] = useState<Record<number, AgentUsageData>>({});
+  const agentProjectMapRef = useRef<Map<number, string>>(new Map());
 
   // Track whether initial layout has been loaded (ref to avoid re-render)
   const layoutReadyRef = useRef(false);
 
   useEffect(() => {
-    // Buffer agents from existingAgents until layout is loaded
+    // Buffer agents from existingAgents/cross-project until layout is loaded
     let pendingAgents: Array<{
       id: number;
       palette?: number;
       hueShift?: number;
       seatId?: string;
       folderName?: string;
+      projectId?: string;
+      projectName?: string;
+      isCrossProject?: boolean;
     }> = [];
 
     const handler = (e: MessageEvent) => {
@@ -122,7 +152,17 @@ export function useExtensionMessages(
         }
         // Add buffered agents now that layout (and seats) are correct
         for (const p of pendingAgents) {
-          os.addAgent(p.id, p.palette, p.hueShift, p.seatId, true, p.folderName);
+          os.addAgent(
+            p.id,
+            p.palette,
+            p.hueShift,
+            p.seatId,
+            true,
+            p.folderName,
+            p.projectId,
+            p.projectName,
+            p.isCrossProject,
+          );
         }
         pendingAgents = [];
         layoutReadyRef.current = true;
@@ -136,12 +176,36 @@ export function useExtensionMessages(
       } else if (msg.type === 'agentCreated') {
         const id = msg.id as number;
         const folderName = msg.folderName as string | undefined;
+        const projectId = msg.projectId as string | undefined;
+        const projectName = msg.projectName as string | undefined;
+        const isCrossProject = msg.isCrossProject as boolean | undefined;
+        if (projectId) {
+          agentProjectMapRef.current.set(id, projectId);
+        }
         setAgents((prev) => (prev.includes(id) ? prev : [...prev, id]));
-        setSelectedAgent(id);
-        os.addAgent(id, undefined, undefined, undefined, undefined, folderName);
-        saveAgentSeats(os);
+        if (!isCrossProject) {
+          setSelectedAgent(id);
+        }
+        // Buffer cross-project agents until layout is ready (same as existingAgents)
+        if (!layoutReadyRef.current) {
+          pendingAgents.push({ id, folderName, projectId, projectName, isCrossProject });
+        } else {
+          os.addAgent(
+            id,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            folderName,
+            projectId,
+            projectName,
+            isCrossProject,
+          );
+          saveAgentSeats(os);
+        }
       } else if (msg.type === 'agentClosed') {
         const id = msg.id as number;
+        agentProjectMapRef.current.delete(id);
         setAgents((prev) => prev.filter((a) => a !== id));
         setSelectedAgent((prev) => (prev === id ? null : prev));
         setAgentTools((prev) => {
@@ -162,6 +226,12 @@ export function useExtensionMessages(
           delete next[id];
           return next;
         });
+        setAgentUsage((prev) => {
+          if (!(id in prev)) return prev;
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
         // Remove all sub-agent characters belonging to this agent
         os.removeAllSubagents(id);
         setSubagentCharacters((prev) => prev.filter((s) => s.parentAgentId !== id));
@@ -173,6 +243,7 @@ export function useExtensionMessages(
           { palette?: number; hueShift?: number; seatId?: string }
         >;
         const folderNames = (msg.folderNames || {}) as Record<number, string>;
+        const projectName = msg.projectName as string | undefined;
         // Buffer agents — they'll be added in layoutLoaded after seats are built
         for (const id of incoming) {
           const m = meta[id];
@@ -182,6 +253,7 @@ export function useExtensionMessages(
             hueShift: m?.hueShift,
             seatId: m?.seatId,
             folderName: folderNames[id],
+            projectName,
           });
         }
         setAgents((prev) => {
@@ -395,6 +467,13 @@ export function useExtensionMessages(
         } catch (err) {
           console.error(`❌ Webview: Error processing furnitureAssetsLoaded:`, err);
         }
+      } else if (msg.type === 'agentUsageUpdate') {
+        const id = msg.id as number;
+        const usage = msg.usage as AgentUsageData;
+        setAgentUsage((prev) => ({ ...prev, [id]: usage }));
+      } else if (msg.type === 'projectsDiscovered') {
+        const incoming = msg.projects as ProjectInfo[];
+        setProjects(incoming);
       }
     };
     window.addEventListener('message', handler);
@@ -413,5 +492,11 @@ export function useExtensionMessages(
     layoutWasReset,
     loadedAssets,
     workspaceFolders,
+    projects,
+    projectFilter,
+    setProjectFilter,
+    agentProjectMap: agentProjectMapRef.current,
+    agentUsage,
+    setSelectedAgent,
   };
 }

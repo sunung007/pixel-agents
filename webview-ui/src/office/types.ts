@@ -190,4 +190,10 @@ export interface Character {
   matrixEffectSeeds: number[];
   /** Workspace folder name (only set for multi-root workspaces) */
   folderName?: string;
+  /** Sanitized project directory name (for cross-project filtering) */
+  projectId?: string;
+  /** Human-readable project name */
+  projectName?: string;
+  /** Whether this is a cross-project agent (no terminal, read-only) */
+  isCrossProject?: boolean;
 }

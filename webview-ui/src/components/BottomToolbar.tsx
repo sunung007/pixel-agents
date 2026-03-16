@@ -30,7 +30,7 @@ const panelStyle: React.CSSProperties = {
 
 const btnBase: React.CSSProperties = {
   padding: '5px 10px',
-  fontSize: '24px',
+  fontSize: '14px',
   color: 'var(--pixel-text)',
   background: 'var(--pixel-btn-bg)',
   border: '2px solid transparent',
@@ -103,7 +103,7 @@ export function BottomToolbar({
             color: 'var(--pixel-agent-text)',
           }}
         >
-          + Agent
+          + 에이전트
         </button>
         {isFolderPickerOpen && (
           <div
@@ -131,7 +131,7 @@ export function BottomToolbar({
                   width: '100%',
                   textAlign: 'left',
                   padding: '6px 10px',
-                  fontSize: '22px',
+                  fontSize: '13px',
                   color: 'var(--pixel-text)',
                   background: hoveredFolder === i ? 'var(--pixel-btn-hover-bg)' : 'transparent',
                   border: 'none',
@@ -158,9 +158,9 @@ export function BottomToolbar({
                 background: hovered === 'edit' ? 'var(--pixel-btn-hover-bg)' : btnBase.background,
               }
         }
-        title="Edit office layout"
+        title="오피스 레이아웃 편집"
       >
-        Layout
+        레이아웃
       </button>
       <div style={{ position: 'relative' }}>
         <button
@@ -176,9 +176,9 @@ export function BottomToolbar({
                     hovered === 'settings' ? 'var(--pixel-btn-hover-bg)' : btnBase.background,
                 }
           }
-          title="Settings"
+          title="설정"
         >
-          Settings
+          설정
         </button>
         <SettingsModal
           isOpen={isSettingsOpen}

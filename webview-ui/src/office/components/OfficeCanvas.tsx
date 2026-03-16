@@ -39,6 +39,8 @@ interface OfficeCanvasProps {
   zoom: number;
   onZoomChange: (zoom: number) => void;
   panRef: React.MutableRefObject<{ x: number; y: number }>;
+  /** Set of agent IDs to hide from rendering (filtered out by project filter) */
+  hiddenAgentIds?: Set<number>;
 }
 
 export function OfficeCanvas({
@@ -56,6 +58,7 @@ export function OfficeCanvas({
   zoom,
   onZoomChange,
   panRef,
+  hiddenAgentIds,
 }: OfficeCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -252,13 +255,19 @@ export function OfficeCanvas({
           characters: officeState.characters,
         };
 
+        // Filter out hidden characters (project filter)
+        const chars =
+          hiddenAgentIds && hiddenAgentIds.size > 0
+            ? officeState.getCharacters().filter((ch) => !hiddenAgentIds.has(ch.id))
+            : officeState.getCharacters();
+
         const { offsetX, offsetY } = renderFrame(
           ctx,
           w,
           h,
           officeState.tileMap,
           officeState.furniture,
-          officeState.getCharacters(),
+          chars,
           zoom,
           panRef.current.x,
           panRef.current.y,
@@ -280,7 +289,16 @@ export function OfficeCanvas({
       stop();
       observer.disconnect();
     };
-  }, [officeState, resizeCanvas, isEditMode, editorState, _editorTick, zoom, panRef]);
+  }, [
+    officeState,
+    resizeCanvas,
+    isEditMode,
+    editorState,
+    _editorTick,
+    zoom,
+    panRef,
+    hiddenAgentIds,
+  ]);
 
   // Convert CSS mouse coords to world (sprite pixel) coords
   const screenToWorld = useCallback(
