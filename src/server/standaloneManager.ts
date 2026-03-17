@@ -386,6 +386,11 @@ export class StandaloneManager {
     return [...this.crossProjectAgents.keys()].sort((a, b) => a - b);
   }
 
+  /** Get the cross-project agents map (read-only access for tray/status) */
+  getCrossProjectAgents(): ReadonlyMap<number, AgentState> {
+    return this.crossProjectAgents;
+  }
+
   /** Send current statuses for cross-project agents */
   sendCrossProjectStatuses(sink: MessageSink): void {
     for (const [agentId, agent] of this.crossProjectAgents) {

@@ -2,7 +2,7 @@
   "version": 1,
   "cols": 21,
   "rows": 22,
-  "layoutRevision": 1,
+  "layoutRevision": 2,
   "tiles": [
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -87,6 +87,12 @@
     {"uid": "f-1773358001163-aqv4", "type": "SMALL_TABLE_SIDE", "col": 1, "row": 18},
     {"uid": "f-1773358458100-4wm2", "type": "COFFEE", "col": 1, "row": 19},
     {"uid": "f-1773358479734-biia", "type": "PLANT_2", "col": 1, "row": 17},
-    {"uid": "f-1773358485454-id8j", "type": "SMALL_PAINTING_2", "col": 17, "row": 9}
+    {"uid": "f-1773358485454-id8j", "type": "SMALL_PAINTING_2", "col": 17, "row": 9},
+    {"uid": "f-2000000000001-wr01", "type": "DESK_FRONT", "col": 11, "row": 11},
+    {"uid": "f-2000000000002-wr02", "type": "PC_FRONT_OFF", "col": 12, "row": 11},
+    {"uid": "f-2000000000003-wr03", "type": "CUSHIONED_CHAIR_BACK", "col": 12, "row": 13},
+    {"uid": "f-2000000000004-wr04", "type": "DESK_FRONT", "col": 16, "row": 11},
+    {"uid": "f-2000000000005-wr05", "type": "PC_FRONT_OFF", "col": 17, "row": 11},
+    {"uid": "f-2000000000006-wr06", "type": "CUSHIONED_CHAIR_BACK", "col": 17, "row": 13}
   ]
 }

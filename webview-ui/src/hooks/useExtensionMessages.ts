@@ -279,6 +279,7 @@ export function useExtensionMessages(
         os.setAgentTool(id, toolName);
         os.setAgentActive(id, true);
         os.clearPermissionBubble(id);
+        saveAgentSeats(os);
         // Create sub-agent character for Task tool subtasks
         if (status.startsWith('Subtask:')) {
           const label = status.slice('Subtask:'.length).trim();
@@ -334,6 +335,7 @@ export function useExtensionMessages(
           return { ...prev, [id]: status };
         });
         os.setAgentActive(id, status === 'active');
+        saveAgentSeats(os);
         if (status === 'waiting') {
           os.showWaitingBubble(id);
           playDoneSound();
