@@ -1,3 +1,4 @@
+import { AUTO_ON_FACING_DEPTH } from '../../constants.js';
 import { getColorizedSprite } from '../colorize.js';
 import type {
   FloorColor,
@@ -7,7 +8,7 @@ import type {
   Seat,
   TileType as TileTypeVal,
 } from '../types.js';
-import { DEFAULT_COLS, DEFAULT_ROWS, Direction, TILE_SIZE, TileType } from '../types.js';
+import { DEFAULT_COLS, DEFAULT_ROWS, Direction, SeatType, TILE_SIZE, TileType } from '../types.js';
 import { getCatalogEntry, getOrientationInGroup } from './furnitureCatalog.js';
 
 /** Convert flat tile array from layout into 2D grid */
@@ -163,7 +164,7 @@ function orientationToFacing(orientation: string): Direction {
 export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
   const seats = new Map<string, Seat>();
 
-  // Build set of all desk tiles
+  // Build set of all desk tiles (for facing direction)
   const deskTiles = new Set<string>();
   for (const item of furniture) {
     const entry = getCatalogEntry(item.type);
@@ -175,6 +176,18 @@ export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
     }
   }
 
+  // Build set of tiles occupied by electronics (PCs, monitors) for work seat detection
+  const electronicsTiles = new Set<string>();
+  for (const item of furniture) {
+    const entry = getCatalogEntry(item.type);
+    if (!entry || entry.category !== 'electronics') continue;
+    for (let dr = 0; dr < entry.footprintH; dr++) {
+      for (let dc = 0; dc < entry.footprintW; dc++) {
+        electronicsTiles.add(`${item.col + dc},${item.row + dr}`);
+      }
+    }
+  }
+
   const dirs: Array<{ dc: number; dr: number; facing: Direction }> = [
     { dc: 0, dr: -1, facing: Direction.UP }, // desk is above chair → face UP
     { dc: 0, dr: 1, facing: Direction.DOWN }, // desk is below chair → face DOWN
@@ -182,14 +195,19 @@ export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
     { dc: 1, dr: 0, facing: Direction.RIGHT }, // desk is right of chair → face RIGHT
   ];
 
-  // For each chair, every footprint tile becomes a seat.
+  // For each chair, footprint tiles become seats.
   // Multi-tile chairs (e.g. 2-tile couches) produce multiple seats.
+  // For chairs with backgroundTiles, only background rows (top N) are valid sitting positions;
+  // non-background rows are structural (legs/frame) and should not produce seats.
   for (const item of furniture) {
     const entry = getCatalogEntry(item.type);
     if (!entry || entry.category !== 'chairs') continue;
 
+    const bgRows = entry.backgroundTiles || 0;
     let seatCount = 0;
     for (let dr = 0; dr < entry.footprintH; dr++) {
+      // Skip non-background rows for chairs with backgroundTiles
+      if (bgRows > 0 && dr >= bgRows) continue;
       for (let dc = 0; dc < entry.footprintW; dc++) {
         const tileCol = item.col + dc;
         const tileRow = item.row + dr;
@@ -210,6 +228,17 @@ export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
           }
         }
 
+        // Classify seat: work (electronics in facing direction) or rest
+        let seatType: SeatType = SeatType.REST;
+        const fdCol = facingDir === Direction.RIGHT ? 1 : facingDir === Direction.LEFT ? -1 : 0;
+        const fdRow = facingDir === Direction.DOWN ? 1 : facingDir === Direction.UP ? -1 : 0;
+        for (let depth = 1; depth <= AUTO_ON_FACING_DEPTH; depth++) {
+          if (electronicsTiles.has(`${tileCol + fdCol * depth},${tileRow + fdRow * depth}`)) {
+            seatType = SeatType.WORK;
+            break;
+          }
+        }
+
         // First seat uses chair uid (backward compat), subsequent use uid:N
         const seatUid = seatCount === 0 ? item.uid : `${item.uid}:${seatCount}`;
         seats.set(seatUid, {
@@ -218,6 +247,7 @@ export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
           seatRow: tileRow,
           facingDir,
           assigned: false,
+          seatType,
         });
         seatCount++;
       }

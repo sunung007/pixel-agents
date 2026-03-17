@@ -125,6 +125,8 @@ export function updateCharacter(
       if (ch.seatTimer < 0) ch.seatTimer = 0; // clear turn-end sentinel
       // If became active, pathfind to seat
       if (ch.isActive) {
+        // Already pathing to seat (set by reassignSeatByType) — let WALK handle it
+        if (ch.path.length > 0) break;
         if (!ch.seatId) {
           // No seat assigned — type in place
           ch.state = CharacterState.TYPE;

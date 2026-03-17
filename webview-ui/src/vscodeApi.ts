@@ -7,6 +7,7 @@ declare function acquireVsCodeApi(): VsCodeApi;
 declare global {
   interface Window {
     __PIXEL_AGENTS_STANDALONE__?: boolean;
+    __PIXEL_AGENTS_ELECTRON__?: boolean;
     __PIXEL_AGENTS_WS_URL__?: string;
   }
 }

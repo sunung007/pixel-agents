@@ -54,6 +54,12 @@ export type Direction = (typeof Direction)[keyof typeof Direction];
 /** 2D array of hex color strings: '' = transparent, '#RRGGBB' = opaque, '#RRGGBBAA' = semi-transparent. [row][col] */
 export type SpriteData = string[][];
 
+export const SeatType = {
+  WORK: 'work',
+  REST: 'rest',
+} as const;
+export type SeatType = (typeof SeatType)[keyof typeof SeatType];
+
 export interface Seat {
   /** Chair furniture uid */
   uid: string;
@@ -64,6 +70,8 @@ export interface Seat {
   /** Direction character faces when sitting (toward adjacent desk) */
   facingDir: Direction;
   assigned: boolean;
+  /** Whether this seat is at a work desk or a rest area (sofa, bench) */
+  seatType: SeatType;
 }
 
 export interface FurnitureInstance {

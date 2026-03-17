@@ -28,9 +28,16 @@ import type {
   OfficeLayout,
   PlacedFurniture,
   Seat,
+  SeatType as SeatTypeVal,
   TileType as TileTypeVal,
 } from '../types.js';
-import { CharacterState, Direction, MATRIX_EFFECT_DURATION, TILE_SIZE } from '../types.js';
+import {
+  CharacterState,
+  Direction,
+  MATRIX_EFFECT_DURATION,
+  SeatType,
+  TILE_SIZE,
+} from '../types.js';
 import { createCharacter, updateCharacter } from './characters.js';
 import { matrixEffectSeeds } from './matrixEffect.js';
 
@@ -91,11 +98,12 @@ export class OfficeState {
       seat.assigned = false;
     }
 
-    // First pass: try to keep characters at their existing seats
+    // First pass: try to keep characters at their existing seats (only if type matches status)
     for (const ch of this.characters.values()) {
       if (ch.seatId && this.seats.has(ch.seatId)) {
         const seat = this.seats.get(ch.seatId)!;
-        if (!seat.assigned) {
+        const preferredType = ch.isActive ? SeatType.WORK : SeatType.REST;
+        if (!seat.assigned && seat.seatType === preferredType) {
           seat.assigned = true;
           // Snap character to seat position
           ch.tileCol = seat.seatCol;
@@ -111,10 +119,11 @@ export class OfficeState {
       ch.seatId = null; // will be reassigned below
     }
 
-    // Second pass: assign remaining characters to free seats
+    // Second pass: assign remaining characters to free seats (prefer type matching status)
     for (const ch of this.characters.values()) {
       if (ch.seatId) continue;
-      const seatId = this.findFreeSeat();
+      const seatId =
+        this.findFreeSeatOfType(ch.isActive ? SeatType.WORK : SeatType.REST) ?? this.findFreeSeat();
       if (seatId) {
         this.seats.get(seatId)!.assigned = true;
         ch.seatId = seatId;
@@ -181,6 +190,53 @@ export class OfficeState {
     return null;
   }
 
+  private findFreeSeatOfType(seatType: SeatTypeVal): string | null {
+    for (const [uid, seat] of this.seats) {
+      if (!seat.assigned && seat.seatType === seatType) return uid;
+    }
+    return null;
+  }
+
+  /** Reassign agent to a seat matching their activity status (work vs rest) */
+  private reassignSeatByType(ch: Character): void {
+    const preferredType = ch.isActive ? SeatType.WORK : SeatType.REST;
+    // If current seat already matches preferred type, do nothing
+    if (ch.seatId) {
+      const currentSeat = this.seats.get(ch.seatId);
+      if (currentSeat && currentSeat.seatType === preferredType) return;
+    }
+    // Find a free seat of preferred type
+    const newSeatId = this.findFreeSeatOfType(preferredType);
+    if (!newSeatId) return; // No seat of preferred type available — stay put
+    // Unassign old seat
+    if (ch.seatId) {
+      const oldSeat = this.seats.get(ch.seatId);
+      if (oldSeat) oldSeat.assigned = false;
+    }
+    // Assign new seat
+    const newSeat = this.seats.get(newSeatId)!;
+    newSeat.assigned = true;
+    ch.seatId = newSeatId;
+    // Pathfind to new seat (walk, don't teleport)
+    const path = this.withOwnSeatUnblocked(ch, () =>
+      findPath(
+        ch.tileCol,
+        ch.tileRow,
+        newSeat.seatCol,
+        newSeat.seatRow,
+        this.tileMap,
+        this.blockedTiles,
+      ),
+    );
+    if (path.length > 0) {
+      ch.path = path;
+      ch.moveProgress = 0;
+      ch.state = CharacterState.WALK;
+      ch.frame = 0;
+      ch.frameTimer = 0;
+    }
+  }
+
   /**
    * Pick a diverse palette for a new agent based on currently active agents.
    * First 6 agents each get a unique skin (random order). Beyond 6, skins
@@ -232,16 +288,16 @@ export class OfficeState {
       hueShift = pick.hueShift;
     }
 
-    // Try preferred seat first, then any free seat
+    // Try preferred seat first (only if WORK type — agents start active), then find best seat
     let seatId: string | null = null;
     if (preferredSeatId && this.seats.has(preferredSeatId)) {
       const seat = this.seats.get(preferredSeatId)!;
-      if (!seat.assigned) {
+      if (!seat.assigned && seat.seatType === SeatType.WORK) {
         seatId = preferredSeatId;
       }
     }
     if (!seatId) {
-      seatId = this.findFreeSeat();
+      seatId = this.findFreeSeatOfType(SeatType.WORK) ?? this.findFreeSeat();
     }
 
     let ch: Character;
@@ -409,12 +465,15 @@ export class OfficeState {
 
     let bestSeatId: string | null = null;
     let bestDist = Infinity;
+    let bestIsWork = false;
     for (const [uid, seat] of this.seats) {
       if (!seat.assigned) {
         const d = dist(seat.seatCol, seat.seatRow);
-        if (d < bestDist) {
+        const isWork = seat.seatType === SeatType.WORK;
+        if (d < bestDist || (d === bestDist && isWork && !bestIsWork)) {
           bestDist = d;
           bestSeatId = uid;
+          bestIsWork = isWork;
         }
       }
     }
@@ -531,6 +590,7 @@ export class OfficeState {
   setAgentActive(id: number, active: boolean): void {
     const ch = this.characters.get(id);
     if (ch) {
+      const wasActive = ch.isActive;
       ch.isActive = active;
       if (!active) {
         // Sentinel -1: signals turn just ended, skip next seat rest timer.
@@ -538,6 +598,10 @@ export class OfficeState {
         ch.seatTimer = -1;
         ch.path = [];
         ch.moveProgress = 0;
+      }
+      // Reassign to appropriate seat type when status changes
+      if (wasActive !== active) {
+        this.reassignSeatByType(ch);
       }
       this.rebuildFurnitureInstances();
     }

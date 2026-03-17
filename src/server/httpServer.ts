@@ -16,7 +16,11 @@ const MIME_TYPES: Record<string, string> = {
   '.ico': 'image/x-icon',
 };
 
-export function createHttpServer(webviewDir: string, wsUrl: string): http.Server {
+export function createHttpServer(
+  webviewDir: string,
+  wsUrl: string,
+  options?: { electron?: boolean },
+): http.Server {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host}`);
     let filePath: string;
@@ -27,7 +31,8 @@ export function createHttpServer(webviewDir: string, wsUrl: string): http.Server
       try {
         let html = fs.readFileSync(filePath, 'utf-8');
         // Inject standalone config before closing </head>
-        const script = `<script>window.__PIXEL_AGENTS_STANDALONE__=true;window.__PIXEL_AGENTS_WS_URL__="${wsUrl}";</script>`;
+        const electronFlag = options?.electron ? 'window.__PIXEL_AGENTS_ELECTRON__=true;' : '';
+        const script = `<script>window.__PIXEL_AGENTS_STANDALONE__=true;${electronFlag}window.__PIXEL_AGENTS_WS_URL__="${wsUrl}";</script>`;
         html = html.replace('</head>', `${script}\n</head>`);
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(html);
