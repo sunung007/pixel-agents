@@ -6,9 +6,10 @@ const projectRoot = path.resolve(__dirname, '..');
 const distDir = path.join(projectRoot, 'dist');
 
 // Write a minimal package.json for Electron packager
+const rootPkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8'));
 const appPkg = {
   name: 'agent-monitor',
-  version: '1.0.0',
+  version: rootPkg.version,
   main: 'tray.js',
 };
 fs.writeFileSync(path.join(distDir, 'package.json'), JSON.stringify(appPkg, null, 2));

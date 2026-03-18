@@ -12,7 +12,7 @@ async function main() {
     platform: 'node',
     target: 'node18',
     outfile: 'dist/tray.js',
-    external: ['electron', 'pngjs', 'ws'],
+    external: ['electron'],
     minify: production,
     sourcemap: !production,
   });
